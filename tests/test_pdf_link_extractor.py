@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from floriano.raw.pdf_link_extractor import PdfLinkExtractor
+from floriano.raw.pdf_link_extractor import PdfLinkExtractor, PdfLinkRecord
 from floriano.utils.execution_logger import PipelineExecutionLogger
 
 
@@ -251,3 +251,57 @@ def test_classify_link() -> None:
     assert PdfLinkExtractor.classify_link("/clients/areadocondomino/relatorios") == "relatorio"
     assert PdfLinkExtractor.classify_link("mailto:test@example.com") == "email"
     assert PdfLinkExtractor.classify_link("") == "empty"
+
+
+def test_pdf_link_extractor_deduplicates_exact_records() -> None:
+    base = PdfLinkRecord(
+        run_id="run-test",
+        competencia="2026_03",
+        source_path="source.pdf",
+        source_sha256="sha-source",
+        page_number=1,
+        page_count=2,
+        link_index_on_page=1,
+        link_kind="LINK_URI",
+        link_type="downloadarquivo",
+        uri="https://example.com/downloadarquivo?id=1",
+        uri_sha256="uri-sha",
+        rect_x0=1.0,
+        rect_y0=2.0,
+        rect_x1=3.0,
+        rect_y1=4.0,
+        extraction_status="SUCCESS",
+        error_message=None,
+        extracted_at_utc="2026-04-26T00:00:00+00:00",
+    )
+
+    duplicate = base
+
+    different_position = PdfLinkRecord(
+        run_id="run-test",
+        competencia="2026_03",
+        source_path="source.pdf",
+        source_sha256="sha-source",
+        page_number=1,
+        page_count=2,
+        link_index_on_page=2,
+        link_kind="LINK_URI",
+        link_type="downloadarquivo",
+        uri="https://example.com/downloadarquivo?id=1",
+        uri_sha256="uri-sha",
+        rect_x0=10.0,
+        rect_y0=20.0,
+        rect_x1=30.0,
+        rect_y1=40.0,
+        extraction_status="SUCCESS",
+        error_message=None,
+        extracted_at_utc="2026-04-26T00:00:00+00:00",
+    )
+
+    result = PdfLinkExtractor.deduplicate_exact_records(
+        [base, duplicate, different_position]
+    )
+
+    assert len(result) == 2
+    assert result[0] == base
+    assert result[1] == different_position

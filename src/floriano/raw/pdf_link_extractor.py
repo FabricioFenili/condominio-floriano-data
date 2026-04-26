@@ -391,6 +391,36 @@ class PdfLinkExtractor:
                 )
             ]
 
+
+    @staticmethod
+    def exact_link_key(record: PdfLinkRecord) -> tuple[object, ...]:
+        return (
+            record.competencia,
+            record.source_sha256,
+            record.page_number,
+            record.uri_sha256,
+            record.rect_x0,
+            record.rect_y0,
+            record.rect_x1,
+            record.rect_y1,
+        )
+
+    @classmethod
+    def deduplicate_exact_records(cls, records: List[PdfLinkRecord]) -> List[PdfLinkRecord]:
+        seen: set[tuple[object, ...]] = set()
+        deduped: List[PdfLinkRecord] = []
+
+        for record in records:
+            key = cls.exact_link_key(record)
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            deduped.append(record)
+
+        return deduped
+
     def extract_pdf_links(self) -> List[PdfLinkRecord]:
         timer = ExecutionTimer()
 
@@ -411,7 +441,9 @@ class PdfLinkExtractor:
         for row in rows:
             all_records.extend(self.extract_single_pdf_links(row))
 
-        self.records = all_records
+        deduped_records = self.deduplicate_exact_records(all_records)
+        duplicates_removed = len(all_records) - len(deduped_records)
+        self.records = deduped_records
 
         self.logger.success(
             layer="raw",
@@ -419,13 +451,13 @@ class PdfLinkExtractor:
             class_name=self.CLASS_NAME,
             method_name="extract_pdf_links",
             operation="extract_all_pdf_links",
-            message="Extração de links de todos os PDFs concluída.",
+            message=f"Extração de links concluída. Duplicatas exatas removidas: {duplicates_removed}.",
             records_in=len(rows),
-            records_out=len(all_records),
+            records_out=len(deduped_records),
             duration_ms=timer.elapsed_ms(),
         )
 
-        return all_records
+        return deduped_records
 
     def build_link_records(self) -> List[Dict[str, object]]:
         if not self.records:
