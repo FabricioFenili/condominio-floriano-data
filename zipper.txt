@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set +e
+
+echo "1) Instalando zip, se necessário..."
+sudo apt-get update -y >/dev/null 2>&1
+sudo apt-get install -y zip >/dev/null 2>&1
+
+echo ""
+echo "2) Removendo arquivos anteriores..."
+rm -f condominio-floriano-data.zip
+rm -f condominio-floriano-data.zip.part-*
+rm -f condominio-floriano-data.sha256
+rm -f condominio-floriano-data.parts.sha256
+rm -f condominio-floriano-data_manifest.txt
+
+echo ""
+echo "3) Gerando manifesto fixo do projeto..."
+find . \
+  -path "./.git" -prune -o \
+  -path "./__pycache__" -prune -o \
+  -path "./.pytest_cache" -prune -o \
+  -path "./.venv" -prune -o \
+  -path "./venv" -prune -o \
+  -path "./node_modules" -prune -o \
+  -type f -print | sort > condominio-floriano-data_manifest.txt
+
+MANIFEST_EXIT=$?
+echo "Exit code manifest: $MANIFEST_EXIT"
+
+if [ "$MANIFEST_EXIT" -ne 0 ]; then
+  echo "ERRO: falha ao gerar manifesto."
+  exit 0
+fi
+
+echo "Total de arquivos no manifesto:"
+wc -l condominio-floriano-data_manifest.txt
+
+echo ""
+echo "4) Gerando ZIP integral temporário..."
+zip -r condominio-floriano-data.zip . \
+  -x ".git/*" \
+  -x "__pycache__/*" \
+  -x "*/__pycache__/*" \
+  -x ".pytest_cache/*" \
+  -x ".venv/*" \
+  -x "venv/*" \
+  -x "node_modules/*" \
+  -x "*.pyc" \
+  -x "condominio-floriano-data.zip" \
+  -x "condominio-floriano-data.zip.part-*" \
+  -x "condominio-floriano-data.sha256" \
+  -x "condominio-floriano-data.parts.sha256" \
+  -x "condominio-floriano-data_manifest.txt"
+
+ZIP_EXIT=$?
+echo "Exit code zip: $ZIP_EXIT"
+
+if [ "$ZIP_EXIT" -ne 0 ]; then
+  echo "ERRO: falha ao gerar ZIP."
+  exit 0
+fi
+
+echo ""
+echo "5) Gerando SHA256 do ZIP integral..."
+sha256sum condominio-floriano-data.zip > condominio-floriano-data.sha256
+cat condominio-floriano-data.sha256
+
+echo ""
+echo "6) Conferindo tamanho do ZIP temporário..."
+ls -lh condominio-floriano-data.zip
+du -h condominio-floriano-data.zip
+
+echo ""
+echo "7) Conferindo se Landing e RAW entraram no ZIP..."
+LANDING_COUNT=$(zipinfo -1 condominio-floriano-data.zip | grep -E "^data/landing/" | wc -l)
+RAW_COUNT=$(zipinfo -1 condominio-floriano-data.zip | grep -E "^data/raw/" | wc -l)
+
+echo "Arquivos data/landing no ZIP: $LANDING_COUNT"
+echo "Arquivos data/raw no ZIP: $RAW_COUNT"
+
+if [ "$LANDING_COUNT" -eq 0 ]; then
+  echo "ERRO: data/landing não entrou no ZIP."
+  exit 0
+fi
+
+if [ "$RAW_COUNT" -eq 0 ]; then
+  echo "ERRO: data/raw não entrou no ZIP."
+  exit 0
+fi
+
+echo ""
+echo "8) Dividindo ZIP em partes menores de 50MB..."
+split -b 50M -d -a 3 condominio-floriano-data.zip condominio-floriano-data.zip.part-
+
+SPLIT_EXIT=$?
+echo "Exit code split: $SPLIT_EXIT"
+
+if [ "$SPLIT_EXIT" -ne 0 ]; then
+  echo "ERRO: falha ao dividir ZIP."
+  exit 0
+fi
+
+echo ""
+echo "9) Gerando SHA256 das partes..."
+sha256sum condominio-floriano-data.zip.part-* > condominio-floriano-data.parts.sha256
+cat condominio-floriano-data.parts.sha256
+
+echo ""
+echo "10) Removendo ZIP integral temporário..."
+rm -f condominio-floriano-data.zip
+
+if [ -f condominio-floriano-data.zip ]; then
+  echo "ERRO: ZIP temporário não foi removido."
+  exit 0
+fi
+
+echo ""
+echo "11) Listando arquivos finais para download..."
+ls -lh condominio-floriano-data.zip.part-*
+ls -lh condominio-floriano-data.sha256
+ls -lh condominio-floriano-data.parts.sha256
+ls -lh condominio-floriano-data_manifest.txt
+
+echo ""
+echo "12) Comando de remontagem futura:"
+echo "cat condominio-floriano-data.zip.part-* > condominio-floriano-data.zip"
+
+echo ""
+echo "13) Resultado final..."
+echo "GERAÇÃO CONCLUÍDA."
+echo ""
+echo "Baixe somente estes arquivos:"
+echo "- condominio-floriano-data.zip.part-*"
+echo "- condominio-floriano-data.sha256"
+echo "- condominio-floriano-data.parts.sha256"
+echo "- condominio-floriano-data_manifest.txt"

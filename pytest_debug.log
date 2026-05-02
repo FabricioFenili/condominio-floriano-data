@@ -1,0 +1,38 @@
+
+==================================== ERRORS ====================================
+__________________ ERROR collecting tests/test_competence.py ___________________
+ImportError while importing test module '/workspaces/condominio-floriano-data/tests/test_competence.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/python/3.12.1/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_competence.py:1: in <module>
+    from _future_ import annotations
+E   ModuleNotFoundError: No module named '_future_'
+_______________ ERROR collecting tests/test_execution_logger.py ________________
+ImportError while importing test module '/workspaces/condominio-floriano-data/tests/test_execution_logger.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/python/3.12.1/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_execution_logger.py:1: in <module>
+    from _future_ import annotations
+E   ModuleNotFoundError: No module named '_future_'
+_______________ ERROR collecting tests/test_source_inventory.py ________________
+ImportError while importing test module '/workspaces/condominio-floriano-data/tests/test_source_inventory.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/python/3.12.1/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_source_inventory.py:1: in <module>
+    from _future_ import annotations
+E   ModuleNotFoundError: No module named '_future_'
+=========================== short test summary info ============================
+ERROR tests/test_competence.py
+ERROR tests/test_execution_logger.py
+ERROR tests/test_source_inventory.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!!
+3 errors in 0.14s

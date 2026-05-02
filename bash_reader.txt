@@ -1,0 +1,34 @@
+set -euo pipefail
+cd /workspaces/condominio-floriano-data
+export PYTHONPATH=src
+
+echo "1) branch atual"
+git branch --show-current
+
+echo
+echo "2) status antes dos testes"
+git status --short
+
+echo
+echo "3) executando testes existentes para checkpoint de conformidade"
+pytest -q
+
+echo
+echo "4) preparando commit de checkpoint antes de expense_reconciliation"
+git add -A
+
+if git diff --cached --quiet; then
+  echo "Nenhuma alteração pendente para commit."
+else
+  git commit -m "chore: checkpoint raw financial rollout before expense reconciliation"
+fi
+
+echo
+echo "5) sincronizando com remoto"
+CURRENT_BRANCH="$(git branch --show-current)"
+git push origin "${CURRENT_BRANCH}"
+
+echo
+echo "6) evidência final"
+git status --short
+git log -1 --oneline
