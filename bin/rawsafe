@@ -1,20 +1,3 @@
-cd /workspaces/condominio-floriano-data
-
-cat > /tmp/codespaces_raw_safe_init.sh <<'BASH'
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="/workspaces/condominio-floriano-data"
-BIN_DIR="${ROOT}/bin"
-LOG_DIR="${ROOT}/logs"
-SAFE_SCRIPT="${BIN_DIR}/rawsafe"
-
-mkdir -p "${BIN_DIR}" "${LOG_DIR}"
-cd "${ROOT}"
-
-git config --global --add safe.directory "${ROOT}" || true
-
-cat > "${SAFE_SCRIPT}" <<'SAFE'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -111,25 +94,3 @@ echo
 echo "Terminal preservado. Log: ${LOG_FILE}"
 
 exit 0
-SAFE
-
-chmod +x "${SAFE_SCRIPT}"
-
-if ! grep -q "alias rawsafe=" ~/.bashrc 2>/dev/null; then
-  {
-    echo ''
-    echo '# condominio-floriano-data safe runner'
-    echo 'export PYTHONPATH=/workspaces/condominio-floriano-data/src'
-    echo 'alias rawsafe="/workspaces/condominio-floriano-data/bin/rawsafe"'
-  } >> ~/.bashrc
-fi
-
-echo "Inicialização segura concluída."
-echo "Agora rode: rawsafe"
-BASH
-
-bash /tmp/codespaces_raw_safe_init.sh || true
-source ~/.bashrc || true
-rawsafe || true
-echo
-echo "Terminal preservado."
