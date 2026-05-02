@@ -9,11 +9,14 @@ cd "$ROOT" || {
 
 FAILED=0
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BRANCH="$(git branch --show-current 2>/dev/null || echo main)"
+
 VERSION_ROOT="$ROOT/screenshot_versions"
 VERSION_DIR="$VERSION_ROOT/screenshot_janeiro_${STAMP}"
 TMP_STAGING="/tmp/condominio_floriano_screenshot_janeiro_staging_${STAMP}"
 ZIP_NAME="condominio-floriano-data_screenshot_janeiro-2026_${STAMP}.zip"
 ZIP_PATH="$VERSION_DIR/$ZIP_NAME"
+ZIP_REL="screenshot_versions/screenshot_janeiro_${STAMP}/${ZIP_NAME}"
 
 mkdir -p "$VERSION_DIR"
 rm -rf "$TMP_STAGING"
@@ -43,15 +46,38 @@ run_step() {
   fi
 }
 
-echo "Screenshot version JANEIRO iniciado"
+parse_github_repo() {
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+
+  if [[ "$remote_url" =~ ^https://github.com/(.+)/(.+)\.git$ ]]; then
+    echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  if [[ "$remote_url" =~ ^https://github.com/(.+)/(.+)$ ]]; then
+    echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  if [[ "$remote_url" =~ ^git@github.com:(.+)/(.+)\.git$ ]]; then
+    echo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  echo ""
+  return 0
+}
+
+echo "SCREENSHOT JANEIRO — GERAÇÃO + PUSH + LINK DE DOWNLOAD"
 echo "ROOT=$ROOT"
+echo "BRANCH=$BRANCH"
 echo "VERSION_DIR=$VERSION_DIR"
-echo "TMP_STAGING=$TMP_STAGING"
 echo "ZIP_PATH=$ZIP_PATH"
 
-run_step "limpar stagings antigos indevidos dentro de screenshot_versions" find "$VERSION_ROOT" -type d -name staging -prune -exec rm -rf {} +
+run_step "limpar staging antigo indevido dentro de screenshot_versions" find "$VERSION_ROOT" -type d -name staging -prune -exec rm -rf {} +
 
-run_step "gerar ZIP do projeto corrente com dados somente de janeiro de 2026" python - <<PY
+run_step "gerar ZIP do projeto corrente com dados somente de janeiro/2026" python - <<PY
 from __future__ import annotations
 
 import fnmatch
@@ -65,7 +91,6 @@ from pathlib import Path
 
 root = Path("$ROOT").resolve()
 tmp_staging = Path("$TMP_STAGING").resolve()
-version_dir = Path("$VERSION_DIR").resolve()
 zip_path = Path("$ZIP_PATH").resolve()
 
 january_tokens = (
@@ -154,28 +179,19 @@ def is_data_context_file(rel: str) -> bool:
     return any(rel.startswith(prefix) for prefix in data_context_keep_patterns)
 
 def should_include_file(rel: str) -> bool:
-    # Código, testes, docs, configs e arquitetura entram inteiros.
     if is_project_infrastructure(rel):
         return True
 
-    # Logs pequenos e contexto operacional entram se não forem snapshots.
     if rel.startswith("logs/"):
         return True
 
-    # Dados: pacote de janeiro.
-    # Regra principal: incluir apenas arquivos cujo caminho indique janeiro/2026.
     if rel.startswith("data/"):
         if has_january_scope(rel):
             return True
-
-        # Mantém outputs RAW de reconciliação/qualidade/exportação como contexto do estado atual,
-        # porque explicam o que já foi desenvolvido, sem trazer toda a massa bruta.
         if is_data_context_file(rel):
             return True
-
         return False
 
-    # Arquivos soltos de raiz que não estão na lista canônica entram se forem texto/configuração.
     root_level = "/" not in rel
     if root_level:
         suffix = Path(rel).suffix.lower()
@@ -337,49 +353,86 @@ print(f"ZIP_SIZE_BYTES={zip_path.stat().st_size}")
 PY
 
 run_step "validar ZIP gerado" test -f "$ZIP_PATH"
-
 run_step "remover staging temporário de /tmp" rm -rf "$TMP_STAGING"
 
+ZIP_SIZE_BYTES="$(stat -c%s "$ZIP_PATH" 2>/dev/null || echo 0)"
+ZIP_SIZE_MB=$((ZIP_SIZE_BYTES / 1024 / 1024))
+
+echo
+echo "ZIP_SIZE_BYTES=$ZIP_SIZE_BYTES"
+echo "ZIP_SIZE_MB_APROX=$ZIP_SIZE_MB"
+
+if [ "$ZIP_SIZE_BYTES" -gt 95000000 ]; then
+  echo "FALHA_CONTROLADA: ZIP maior que ~95MB. Não será enviado ao GitHub."
+  FAILED=1
+else
+  run_step "mostrar regra de .gitignore aplicada ao ZIP" git check-ignore -v "$ZIP_REL"
+
+  echo
+  echo "Forçando inclusão do ZIP e do screenshot.txt no Git..."
+  set +e
+  git add -f "$ZIP_REL" screenshot.txt
+  rc=$?
+  set -u
+  if [ "$rc" -ne 0 ]; then
+    echo "FALHA_CONTROLADA: git add -f falhou"
+    FAILED=1
+  else
+    echo "OK: git add -f executado"
+  fi
+
+  echo
+  echo "Arquivos staged:"
+  git diff --cached --name-status || true
+
+  if git diff --cached --quiet; then
+    echo "Nada novo staged para commit."
+  else
+    run_step "commit do screenshot de janeiro" git commit -m "chore: add janeiro screenshot package"
+  fi
+
+  run_step "push para origin/$BRANCH" git push origin "$BRANCH"
+fi
+
+GITHUB_REPO="$(parse_github_repo)"
+
 echo
 echo "============================================================"
-echo "EVIDÊNCIA DO SCREENSHOT VERSION — JANEIRO"
+echo "EVIDÊNCIA FINAL"
 echo "============================================================"
 
-ls -lh "$ZIP_PATH" || FAILED=1
+ls -lh "$ZIP_PATH" || true
 stat -c "TAMANHO_BYTES=%s" "$ZIP_PATH" || true
+git log -1 --oneline || true
+git ls-files "$ZIP_REL" || true
+git status --short || true
 
-echo
-echo "Arquivos dentro da pasta versionada:"
-find "$VERSION_DIR" -maxdepth 2 -print | sort
+if [ -n "$GITHUB_REPO" ]; then
+  BLOB_URL="https://github.com/${GITHUB_REPO}/blob/${BRANCH}/${ZIP_REL}"
+  RAW_URL="https://github.com/${GITHUB_REPO}/raw/${BRANCH}/${ZIP_REL}"
 
-echo
-echo "Verificação: não deve existir pasta staging dentro de screenshot_versions"
-find "$VERSION_ROOT" -type d -name staging -print
+  echo
+  echo "GITHUB_FILE_URL=$BLOB_URL"
+  echo "RAW_DOWNLOAD_URL=$RAW_URL"
 
-echo
-echo "Contexto interno do ZIP:"
-python - <<PY
-from pathlib import Path
-import zipfile
-
-zip_path = Path("$ZIP_PATH")
-if zip_path.exists():
-    with zipfile.ZipFile(zip_path) as zf:
-        names = zf.namelist()
-        print(f"zip_entries={len(names)}")
-        for name in names:
-            if name.startswith("_screenshot_context/"):
-                print(name)
-PY
+  if command -v gh >/dev/null 2>&1; then
+    echo
+    echo "Tentando abrir o arquivo no GitHub pelo gh browse..."
+    gh browse "$BLOB_URL" >/dev/null 2>&1 || true
+  fi
+else
+  echo
+  echo "FALHA_CONTROLADA: não consegui derivar owner/repo a partir do remote origin."
+fi
 
 echo
 echo "============================================================"
 if [ "$FAILED" -eq 0 ]; then
   echo "STATUS_FINAL=OK"
-  echo "ZIP_PATH=$ZIP_PATH"
+  echo "AÇÃO_FINAL: abra RAW_DOWNLOAD_URL no navegador para baixar o ZIP."
 else
   echo "STATUS_FINAL=FALHA_CONTROLADA"
-  echo "O terminal foi preservado. Revise o erro acima."
+  echo "Terminal preservado. Revise a saída acima."
 fi
 echo "============================================================"
 
