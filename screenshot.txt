@@ -1,0 +1,386 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT="/workspaces/condominio-floriano-data"
+cd "$ROOT" || {
+  echo "FALHA_CONTROLADA: não foi possível acessar $ROOT"
+  exit 0
+}
+
+FAILED=0
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+VERSION_ROOT="$ROOT/screenshot_versions"
+VERSION_DIR="$VERSION_ROOT/screenshot_janeiro_${STAMP}"
+TMP_STAGING="/tmp/condominio_floriano_screenshot_janeiro_staging_${STAMP}"
+ZIP_NAME="condominio-floriano-data_screenshot_janeiro-2026_${STAMP}.zip"
+ZIP_PATH="$VERSION_DIR/$ZIP_NAME"
+
+mkdir -p "$VERSION_DIR"
+rm -rf "$TMP_STAGING"
+mkdir -p "$TMP_STAGING"
+
+run_step() {
+  local label="$1"
+  shift
+
+  echo
+  echo "============================================================"
+  echo "STEP: $label"
+  echo "CMD : $*"
+  echo "============================================================"
+
+  set +e
+  "$@"
+  local rc=$?
+  set -u
+
+  if [ "$rc" -eq 0 ]; then
+    echo "OK: $label"
+  else
+    echo "FALHA_CONTROLADA: $label"
+    echo "EXIT_CODE=$rc"
+    FAILED=1
+  fi
+}
+
+echo "Screenshot version JANEIRO iniciado"
+echo "ROOT=$ROOT"
+echo "VERSION_DIR=$VERSION_DIR"
+echo "TMP_STAGING=$TMP_STAGING"
+echo "ZIP_PATH=$ZIP_PATH"
+
+run_step "limpar stagings antigos indevidos dentro de screenshot_versions" find "$VERSION_ROOT" -type d -name staging -prune -exec rm -rf {} +
+
+run_step "gerar ZIP do projeto corrente com dados somente de janeiro de 2026" python - <<PY
+from __future__ import annotations
+
+import fnmatch
+import hashlib
+import json
+import shutil
+import subprocess
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+root = Path("$ROOT").resolve()
+tmp_staging = Path("$TMP_STAGING").resolve()
+version_dir = Path("$VERSION_DIR").resolve()
+zip_path = Path("$ZIP_PATH").resolve()
+
+january_tokens = (
+    "2026-01",
+    "2026_01",
+    "202601",
+    "jan",
+    "janeiro",
+)
+
+excluded_dir_names = {
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".ipynb_checkpoints",
+    "node_modules",
+    ".cache",
+}
+
+excluded_file_patterns = (
+    "*.pyc",
+    "*.pyo",
+    "*.pyd",
+    "*.so",
+    "*.sqlite-wal",
+    "*.sqlite-shm",
+    "*.db-wal",
+    "*.db-shm",
+    ".DS_Store",
+)
+
+always_include_project_prefixes = (
+    ".github/",
+    "bin/",
+    "configs/",
+    "db/",
+    "docs/",
+    "schemas/",
+    "sql/",
+    "src/",
+    "tests/",
+)
+
+always_include_project_files = {
+    ".env.example",
+    ".gitignore",
+    "Makefile",
+    "README.md",
+    "pyproject.toml",
+    "screenshot.txt",
+    "bash_reader.txt",
+    "zipper.txt",
+}
+
+data_context_keep_patterns = (
+    "data/raw/reconciliation/",
+    "data/raw/quality/",
+    "data/exports/",
+)
+
+def rel_posix(path: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def has_january_scope(rel: str) -> bool:
+    lowered = rel.lower()
+    return any(token.lower() in lowered for token in january_tokens)
+
+def is_project_infrastructure(rel: str) -> bool:
+    if rel in always_include_project_files:
+        return True
+    return any(rel.startswith(prefix) for prefix in always_include_project_prefixes)
+
+def is_data_context_file(rel: str) -> bool:
+    return any(rel.startswith(prefix) for prefix in data_context_keep_patterns)
+
+def should_include_file(rel: str) -> bool:
+    # Código, testes, docs, configs e arquitetura entram inteiros.
+    if is_project_infrastructure(rel):
+        return True
+
+    # Logs pequenos e contexto operacional entram se não forem snapshots.
+    if rel.startswith("logs/"):
+        return True
+
+    # Dados: pacote de janeiro.
+    # Regra principal: incluir apenas arquivos cujo caminho indique janeiro/2026.
+    if rel.startswith("data/"):
+        if has_january_scope(rel):
+            return True
+
+        # Mantém outputs RAW de reconciliação/qualidade/exportação como contexto do estado atual,
+        # porque explicam o que já foi desenvolvido, sem trazer toda a massa bruta.
+        if is_data_context_file(rel):
+            return True
+
+        return False
+
+    # Arquivos soltos de raiz que não estão na lista canônica entram se forem texto/configuração.
+    root_level = "/" not in rel
+    if root_level:
+        suffix = Path(rel).suffix.lower()
+        return suffix in {"", ".txt", ".md", ".yml", ".yaml", ".toml", ".json", ".cfg", ".ini"}
+
+    return False
+
+def should_exclude(path: Path) -> tuple[bool, str]:
+    rel = rel_posix(path)
+    parts = path.relative_to(root).parts
+
+    if rel.startswith("screenshot_versions/"):
+        return True, "exclude_snapshot_outputs"
+
+    for part in parts:
+        if part in excluded_dir_names:
+            return True, f"excluded_dir:{part}"
+
+    if path.is_file():
+        for pattern in excluded_file_patterns:
+            if fnmatch.fnmatch(path.name, pattern):
+                return True, f"excluded_file_pattern:{pattern}"
+
+    if path.is_file() and not should_include_file(rel):
+        if rel.startswith("data/"):
+            return True, "data_outside_january_2026_scope"
+        return True, "outside_project_snapshot_scope"
+
+    return False, ""
+
+def run_capture(cmd: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return (result.stdout or "") + (result.stderr or "")
+    except Exception as exc:
+        return f"ERRO_AO_EXECUTAR {' '.join(cmd)}: {exc}"
+
+included = []
+excluded = []
+
+for path in sorted(root.rglob("*")):
+    rel = rel_posix(path)
+    exclude, reason = should_exclude(path)
+
+    if exclude:
+        excluded.append({
+            "path": rel,
+            "reason": reason,
+            "type": "dir" if path.is_dir() else "file",
+        })
+        continue
+
+    if path.is_dir():
+        continue
+
+    target = tmp_staging / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, target)
+
+    included.append({
+        "path": rel,
+        "size_bytes": path.stat().st_size,
+        "sha256": sha256_file(path),
+    })
+
+context_dir = tmp_staging / "_screenshot_context"
+context_dir.mkdir(parents=True, exist_ok=True)
+
+(context_dir / "git_status.txt").write_text(
+    run_capture(["git", "status", "--short"]),
+    encoding="utf-8",
+)
+
+(context_dir / "git_branch.txt").write_text(
+    run_capture(["git", "branch", "--show-current"]),
+    encoding="utf-8",
+)
+
+(context_dir / "git_log_last_30.txt").write_text(
+    run_capture(["git", "log", "--oneline", "-30"]),
+    encoding="utf-8",
+)
+
+file_tree = []
+for item in sorted(tmp_staging.rglob("*")):
+    if item.is_file():
+        file_tree.append(item.relative_to(tmp_staging).as_posix())
+
+(context_dir / "file_tree.txt").write_text(
+    "\\n".join(file_tree) + "\\n",
+    encoding="utf-8",
+)
+
+manifest = {
+    "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+    "project": "condominio-floriano-data",
+    "root": str(root),
+    "zip_path": str(zip_path),
+    "scope": {
+        "description": "snapshot da infraestrutura corrente do projeto com dados brutos/origem somente de janeiro de 2026",
+        "project_code": "included",
+        "configs_docs_sql_schemas_tests_src": "included",
+        "data_scope": "janeiro/2026 por tokens no caminho",
+        "data_context_kept": data_context_keep_patterns,
+        "january_tokens": january_tokens,
+        "screenshot_versions": "excluded to avoid recursive packages",
+        "staging": "temporary only in /tmp, removed after ZIP creation",
+        "excluded_dirs": sorted(excluded_dir_names),
+        "excluded_file_patterns": excluded_file_patterns,
+    },
+    "counts": {
+        "included_files": len(included),
+        "excluded_items": len(excluded),
+        "zip_entries": len(file_tree),
+    },
+    "included_files": included,
+    "excluded_items": excluded,
+}
+
+(context_dir / "screenshot_manifest.json").write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
+
+(context_dir / "screenshot_summary.txt").write_text(
+    "\\n".join([
+        f"generated_at_utc={manifest['generated_at_utc']}",
+        f"project={manifest['project']}",
+        f"root={root}",
+        f"zip_path={zip_path}",
+        f"included_files={len(included)}",
+        f"excluded_items={len(excluded)}",
+        "scope=infraestrutura corrente do projeto + dados de janeiro/2026",
+        "observacao=staging usado somente em /tmp e removido após empacotamento",
+        "observacao=data/raw/reconciliation, data/raw/quality e data/exports mantidos como contexto operacional do estado atual",
+    ]) + "\\n",
+    encoding="utf-8",
+)
+
+zip_path.parent.mkdir(parents=True, exist_ok=True)
+if zip_path.exists():
+    zip_path.unlink()
+
+with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+    for file in sorted(tmp_staging.rglob("*")):
+        if file.is_file():
+            zf.write(file, file.relative_to(tmp_staging).as_posix())
+
+print(f"ZIP_CREATED={zip_path}")
+print(f"INCLUDED_FILES={len(included)}")
+print(f"EXCLUDED_ITEMS={len(excluded)}")
+print(f"ZIP_SIZE_BYTES={zip_path.stat().st_size}")
+PY
+
+run_step "validar ZIP gerado" test -f "$ZIP_PATH"
+
+run_step "remover staging temporário de /tmp" rm -rf "$TMP_STAGING"
+
+echo
+echo "============================================================"
+echo "EVIDÊNCIA DO SCREENSHOT VERSION — JANEIRO"
+echo "============================================================"
+
+ls -lh "$ZIP_PATH" || FAILED=1
+stat -c "TAMANHO_BYTES=%s" "$ZIP_PATH" || true
+
+echo
+echo "Arquivos dentro da pasta versionada:"
+find "$VERSION_DIR" -maxdepth 2 -print | sort
+
+echo
+echo "Verificação: não deve existir pasta staging dentro de screenshot_versions"
+find "$VERSION_ROOT" -type d -name staging -print
+
+echo
+echo "Contexto interno do ZIP:"
+python - <<PY
+from pathlib import Path
+import zipfile
+
+zip_path = Path("$ZIP_PATH")
+if zip_path.exists():
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        print(f"zip_entries={len(names)}")
+        for name in names:
+            if name.startswith("_screenshot_context/"):
+                print(name)
+PY
+
+echo
+echo "============================================================"
+if [ "$FAILED" -eq 0 ]; then
+  echo "STATUS_FINAL=OK"
+  echo "ZIP_PATH=$ZIP_PATH"
+else
+  echo "STATUS_FINAL=FALHA_CONTROLADA"
+  echo "O terminal foi preservado. Revise o erro acima."
+fi
+echo "============================================================"
+
+exit 0
